@@ -1,0 +1,15 @@
+# Receive files even when the HomeDrop window is closed.
+# Install:
+#   mkdir -p ~/.config/systemd/user && cp scripts/homedropd.service ~/.config/systemd/user/
+#   sed -i "s|@BIN@|$PWD/core/bin/homedropd|" ~/.config/systemd/user/homedropd.service
+#   systemctl --user daemon-reload && systemctl --user enable --now homedropd
+[Unit]
+Description=HomeDrop file receiver
+After=network-online.target
+
+[Service]
+ExecStart=@BIN@ daemon
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
