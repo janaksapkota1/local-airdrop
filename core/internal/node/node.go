@@ -34,6 +34,8 @@ type Config struct {
 	Port     int    // transfer port (0 = default 53530)
 	OS       string // reported OS (default runtime.GOOS; "android" on phones)
 	Defaults Settings
+	// DiscoveryPort overrides the UDP discovery port (tests only).
+	DiscoveryPort int
 }
 
 type Self struct {
@@ -123,6 +125,7 @@ type Node struct {
 	bySession map[string]*TransferView
 	subs      map[chan Event]struct{}
 	chats     map[string]*Conversation // peer ID → chat
+	saved     []SavedAddr              // devices added by IP address
 }
 
 // Start brings the device online. It runs until ctx is cancelled.
@@ -139,6 +142,7 @@ func Start(ctx context.Context, cfg Config) (*Node, error) {
 	}
 	n.settings = loadSettings(cfg.DataDir, cfg.Defaults)
 	n.chats = loadChats(cfg.DataDir)
+	n.saved = loadSaved(cfg.DataDir)
 	if err := os.MkdirAll(n.settings.DownloadDir, 0o755); err != nil {
 		return nil, fmt.Errorf("download folder: %w", err)
 	}
@@ -169,10 +173,15 @@ func Start(ctx context.Context, cfg Config) (*Node, error) {
 		n.emit(Event{"peers", n.Peers()})
 		go n.flushQueued() // a device came back: send what was waiting for it
 	})
+	if cfg.DiscoveryPort != 0 {
+		n.disc.WithPort(cfg.DiscoveryPort)
+	}
 	if err := n.disc.Start(ctx); err != nil {
 		// Still usable via IP address, so don't fail.
 		fmt.Fprintln(os.Stderr, "discovery unavailable:", err)
 	}
+	n.disc.SetDirect(n.directHosts())
+	go n.probeSaved(ctx)
 	return n, nil
 }
 
@@ -234,6 +243,7 @@ type State struct {
 	Offers    []OfferView    `json:"offers"`
 	Transfers []TransferView `json:"transfers"`
 	Chats     []ChatSummary  `json:"chats"`
+	Saved     []SavedAddr    `json:"saved"`
 }
 
 func (n *Node) State() State {
@@ -245,7 +255,8 @@ func (n *Node) State() State {
 	for _, p := range peers {
 		online[p.ID] = true
 	}
-	st := State{Self: self, Settings: n.settings, Peers: peers, Chats: n.chatsLocked(online)}
+	st := State{Self: self, Settings: n.settings, Peers: peers, Chats: n.chatsLocked(online),
+		Saved: append([]SavedAddr{}, n.saved...)}
 	for _, o := range n.offers {
 		st.Offers = append(st.Offers, *o)
 	}
@@ -475,7 +486,11 @@ func (n *Node) Send(req SendRequest) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("cannot reach %s: %w", req.Addr, err)
 		}
+		if t.ID == n.id.Fingerprint {
+			return "", errors.New("that address is this device")
+		}
 		target = t
+		n.remember(t)
 	} else {
 		for _, p := range n.disc.Peers() {
 			if p.ID == req.To {

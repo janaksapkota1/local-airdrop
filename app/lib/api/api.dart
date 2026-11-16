@@ -43,6 +43,8 @@ class CoreApi {
   Future<void> cancel(String transferId) => _req('POST', '/api/transfers/$transferId/cancel');
   Future<void> clearFinished() => _req('POST', '/api/transfers/clear');
   Future<void> refresh() => _req('POST', '/api/refresh');
+  Future<Peer> addAddress(String addr) async => Peer.fromJson(await _req('POST', '/api/addresses', {'addr': addr}));
+  Future<void> removeAddress(String addr) => _req('DELETE', '/api/addresses/${Uri.encodeComponent(addr)}');
   Future<Settings> updateSettings(Settings s) async =>
       Settings.fromJson(await _req('PUT', '/api/settings', s.toJson()));
 

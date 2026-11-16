@@ -75,6 +75,32 @@ class _SettingsScreenState extends State<SettingsScreen> {
               value: s.autoAccept,
               onChanged: (v) => _save(s.copyWith(autoAccept: v)),
             ),
+            if (widget.model.saved.isNotEmpty) ...[
+              const Divider(),
+              const ListTile(
+                title: Text('Devices added by IP address'),
+                subtitle: Text('Checked directly, for networks where devices can\'t find each other'),
+              ),
+              for (final a in widget.model.saved)
+                ListTile(
+                  leading: Icon(Icons.circle,
+                      size: 12,
+                      color: widget.model.isOnline(a.id) ? Colors.green : Theme.of(context).colorScheme.outline),
+                  title: Text(a.name),
+                  subtitle: Text('${a.addr} · ${widget.model.isOnline(a.id) ? 'online' : 'offline'}'),
+                  trailing: IconButton(
+                    tooltip: 'Forget',
+                    icon: const Icon(Icons.delete_outline),
+                    onPressed: () async {
+                      try {
+                        await widget.model.api!.removeAddress(a.addr);
+                      } catch (e) {
+                        if (context.mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+                      }
+                    },
+                  ),
+                ),
+            ],
             const Divider(),
             ListTile(
               leading: const Icon(Icons.fingerprint),

@@ -27,6 +27,7 @@ type Target struct {
 	ID   string // fingerprint; the TLS connection is pinned to it
 	Name string
 	Addr string // host:port
+	OS   string // filled in by Resolve
 }
 
 type SendOptions struct {
@@ -102,7 +103,7 @@ func (c *Client) Resolve(ctx context.Context, addr string) (Target, error) {
 	if info.ID != fp {
 		return Target{}, errors.New("device info does not match its certificate")
 	}
-	return Target{ID: fp, Name: info.Name, Addr: addr}, nil
+	return Target{ID: fp, Name: info.Name, Addr: addr, OS: info.OS}, nil
 }
 
 // Send offers paths and/or text to t and uploads the files once accepted.

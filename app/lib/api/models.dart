@@ -37,6 +37,17 @@ class Peer {
         trusted = j['trusted'] ?? false;
 }
 
+/// A device that was added by IP address (remembered for networks where
+/// automatic discovery can't reach it).
+class SavedAddress {
+  final String addr, id, name, os;
+  SavedAddress.fromJson(Map<String, dynamic> j)
+      : addr = j['addr'] ?? '',
+        id = j['id'] ?? '',
+        name = j['name'] ?? '?',
+        os = j['os'] ?? '';
+}
+
 class Offer {
   final String id, senderId, senderName, senderOs, pairCode;
   final bool trusted;

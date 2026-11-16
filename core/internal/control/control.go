@@ -8,6 +8,8 @@
 //	POST /api/transfers/clear
 //	PUT  /api/settings                  node.Settings
 //	POST /api/refresh                   re-scan for devices
+//	POST /api/addresses                 {addr} connect by IP and remember → peer
+//	DELETE /api/addresses/{addr}        forget a saved address
 //	GET  /api/chats                     conversations, most recent first
 //	GET  /api/chats/{peer}              messages with one device
 //	POST /api/chats/{peer}/messages     {text}
@@ -145,6 +147,24 @@ func Serve(ctx context.Context, n *node.Node, ln net.Listener, token string) err
 	})
 	mux.HandleFunc("DELETE /api/chats/{peer}", func(w http.ResponseWriter, r *http.Request) {
 		n.DeleteChat(r.PathValue("peer"))
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	})
+	mux.HandleFunc("POST /api/addresses", func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Addr string `json:"addr"`
+		}
+		if !readJSON(w, r, &req) {
+			return
+		}
+		p, err := n.AddAddress(req.Addr)
+		if err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		writeJSON(w, 200, p)
+	})
+	mux.HandleFunc("DELETE /api/addresses/{addr}", func(w http.ResponseWriter, r *http.Request) {
+		n.RemoveAddress(r.PathValue("addr"))
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	})
 	mux.HandleFunc("POST /api/refresh", func(w http.ResponseWriter, r *http.Request) {

@@ -22,6 +22,7 @@ class AppModel extends ChangeNotifier {
   Self? self;
   Settings? settings;
   List<Peer> peers = [];
+  List<SavedAddress> saved = [];
   final Map<String, Offer> offers = {};
   final Map<String, Transfer> transfers = {};
   final Map<String, ChatSummary> chats = {};
@@ -84,6 +85,7 @@ class AppModel extends ChangeNotifier {
     self = Self.fromJson(s['self']);
     settings = Settings.fromJson(s['settings']);
     peers = [for (final p in (s['peers'] ?? const [])) Peer.fromJson(p)];
+    saved = [for (final a in (s['saved'] ?? const [])) SavedAddress.fromJson(a)];
     final newOffers = {for (final o in (s['offers'] ?? const [])) Offer.fromJson(o)};
     for (final o in newOffers) {
       if (!offers.containsKey(o.id)) _offerCtrl.add(o);
@@ -168,6 +170,8 @@ class AppModel extends ChangeNotifier {
     switch (e.type) {
       case 'peers':
         peers = [for (final p in (e.data ?? const [])) Peer.fromJson(p)];
+      case 'saved':
+        saved = [for (final a in (e.data ?? const [])) SavedAddress.fromJson(a)];
       case 'offer':
         final o = Offer.fromJson(e.data);
         offers[o.id] = o;

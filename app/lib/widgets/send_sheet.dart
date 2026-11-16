@@ -106,22 +106,29 @@ Future<String?> _askText(BuildContext context) {
   );
 }
 
-/// For when discovery is blocked (guest Wi-Fi, firewall): send by IP:port.
+/// For when discovery is blocked (separate VLANs, guest Wi-Fi, firewall):
+/// connect by IP. The device is remembered and shows up as online from then
+/// on, on this device and on the other one.
 Future<void> connectByAddress(BuildContext context, AppModel model) async {
   final ctrl = TextEditingController();
   final addr = await showDialog<String>(
     context: context,
     builder: (d) => AlertDialog(
       title: const Text('Connect by address'),
-      content: TextField(
-        controller: ctrl,
-        autofocus: true,
-        decoration: const InputDecoration(
-          labelText: 'IP address',
-          hintText: '192.168.1.20 or 192.168.1.20:53530',
-          border: OutlineInputBorder(),
+      content: Column(mainAxisSize: MainAxisSize.min, children: [
+        TextField(
+          controller: ctrl,
+          autofocus: true,
+          keyboardType: TextInputType.url,
+          decoration: const InputDecoration(
+            labelText: 'IP address',
+            hintText: '192.168.1.20 or 192.168.1.20:53530',
+            border: OutlineInputBorder(),
+          ),
         ),
-      ),
+        const SizedBox(height: 12),
+        const Text('The device will be remembered and listed as online whenever it can be reached.'),
+      ]),
       actions: [
         TextButton(onPressed: () => Navigator.pop(d), child: const Text('Cancel')),
         FilledButton(onPressed: () => Navigator.pop(d, ctrl.text.trim()), child: const Text('Next')),
@@ -130,8 +137,16 @@ Future<void> connectByAddress(BuildContext context, AppModel model) async {
   );
   if (addr == null || addr.isEmpty || !context.mounted) return;
   final full = addr.contains(':') ? addr : '$addr:53530';
-  final peer = Peer.fromJson({'id': '', 'name': full, 'os': '', 'addr': full});
-  await showSendSheet(context, model, peer, addr: full);
+  final Peer peer;
+  try {
+    peer = await model.api!.addAddress(full);
+  } catch (e) {
+    if (context.mounted) _toast(context, '$e');
+    return;
+  }
+  if (!context.mounted) return;
+  _toast(context, 'Added ${peer.name}');
+  await showSendSheet(context, model, peer, addr: peer.addr);
 }
 
 /// Content shared into HomeDrop from another app: choose a device.

@@ -36,5 +36,9 @@ Check that the codes match and accept. On Android you can also use **Share → H
 from any app. Received files go to `~/Downloads/HomeDrop` (Linux) or
 `Download/HomeDrop` (Android).
 
-If devices don't see each other (guest Wi-Fi, firewall), use the network icon to
-connect by IP address.
+If devices don't see each other (guest Wi-Fi, firewall, or an office where wired
+PCs and Wi-Fi are on separate VLANs), use the network icon to connect by IP
+address. You only need to do this once, on one of the two devices: the address is
+remembered and checked every few seconds, so both devices then list each other as
+online while they can reach each other. Saved addresses can be removed in Settings.
+This needs TCP and UDP port 53530 to be allowed between the two networks.
