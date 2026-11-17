@@ -3,6 +3,7 @@
 //	GET  /api/state                     full snapshot
 //	GET  /api/events                    Server-Sent Events stream of node.Event
 //	POST /api/send                      {to|addr, paths, text} → {id}
+//	POST /api/send-many                 {to: [ids] | all: true, paths, text} → {ids, errors}
 //	POST /api/offers/{id}               {accept: bool}
 //	POST /api/transfers/{id}/cancel
 //	POST /api/transfers/clear
@@ -85,6 +86,18 @@ func Serve(ctx context.Context, n *node.Node, ln net.Listener, token string) err
 			return
 		}
 		writeJSON(w, 200, map[string]string{"id": id})
+	})
+	mux.HandleFunc("POST /api/send-many", func(w http.ResponseWriter, r *http.Request) {
+		var req node.SendManyRequest
+		if !readJSON(w, r, &req) {
+			return
+		}
+		res, err := n.SendMany(req)
+		if err != nil {
+			writeErr(w, 400, err)
+			return
+		}
+		writeJSON(w, 200, res)
 	})
 	mux.HandleFunc("POST /api/offers/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
