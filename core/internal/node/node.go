@@ -570,6 +570,66 @@ func (n *Node) Send(req SendRequest) (string, error) {
 	return t.ID, nil
 }
 
+// SendManyRequest sends the same files/text to several devices at once.
+// Each device gets its own independent transfer: one declining, being slow
+// or going offline does not affect the others.
+type SendManyRequest struct {
+	To    []string `json:"to"`  // peer IDs
+	All   bool     `json:"all"` // every device currently visible (To is ignored)
+	Paths []string `json:"paths"`
+	Text  string   `json:"text"`
+}
+
+type SendManyResult struct {
+	IDs    map[string]string `json:"ids"`              // peer ID → transfer ID
+	Errors map[string]string `json:"errors,omitempty"` // peer ID → why it was not started
+}
+
+func (n *Node) SendMany(req SendManyRequest) (SendManyResult, error) {
+	if len(req.Paths) == 0 && req.Text == "" {
+		return SendManyResult{}, errors.New("nothing to send")
+	}
+	to := req.To
+	if req.All {
+		to = nil
+		for _, p := range n.disc.Peers() {
+			to = append(to, p.ID)
+		}
+	}
+	seen := map[string]bool{}
+	var targets []string
+	for _, id := range to {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			targets = append(targets, id)
+		}
+	}
+	if len(targets) == 0 {
+		return SendManyResult{}, errors.New("no devices to send to")
+	}
+	// Check the paths once up front rather than failing N times.
+	if len(req.Paths) > 0 {
+		if _, err := transfer.BuildManifest(req.Paths); err != nil {
+			return SendManyResult{}, err
+		}
+	}
+	res := SendManyResult{IDs: map[string]string{}, Errors: map[string]string{}}
+	for _, id := range targets {
+		tid, err := n.Send(SendRequest{To: id, Paths: req.Paths, Text: req.Text})
+		if err != nil {
+			res.Errors[id] = err.Error()
+			continue
+		}
+		res.IDs[id] = tid
+	}
+	if len(res.IDs) == 0 {
+		for _, e := range res.Errors {
+			return res, errors.New(e)
+		}
+	}
+	return res, nil
+}
+
 // Cancel stops a running transfer in either direction.
 func (n *Node) Cancel(transferID string) error {
 	n.mu.Lock()

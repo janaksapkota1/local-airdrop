@@ -28,6 +28,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   AppModel get model => widget.model;
   bool _focused = true;
 
+  /// Devices ticked for a multi-device send; null when not selecting.
+  Set<String>? _selection;
+
+  void _toggle(String peerId) => setState(() {
+        final s = _selection ??= {};
+        if (!s.remove(peerId)) s.add(peerId);
+      });
+
+  void _sendToSelected() {
+    final chosen = model.peers.where((p) => _selection?.contains(p.id) ?? false).toList();
+    if (chosen.isEmpty) return;
+    setState(() => _selection = null);
+    if (chosen.length == 1) {
+      showSendSheet(context, model, chosen.first);
+    } else {
+      showSendManySheet(context, model, chosen);
+    }
+  }
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) => _focused = state == AppLifecycleState.resumed;
 
@@ -105,8 +124,36 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
         if (model.self == null) {
           return const Scaffold(body: Center(child: CircularProgressIndicator()));
         }
+        // Devices that went away can't stay selected.
+        _selection?.removeWhere((id) => !model.isOnline(id));
+        final selecting = _selection != null;
+        final selCount = _selection?.length ?? 0;
+        final allSelected = selecting && selCount == model.peers.length && selCount > 0;
         return Scaffold(
-          appBar: AppBar(
+          appBar: selecting
+              ? AppBar(
+                  // Back leaves selection mode instead of the screen.
+                  leading: PopScope(
+                    canPop: false,
+                    onPopInvokedWithResult: (didPop, _) {
+                      if (!didPop) setState(() => _selection = null);
+                    },
+                    child: IconButton(
+                      tooltip: 'Cancel',
+                      icon: const Icon(Icons.close),
+                      onPressed: () => setState(() => _selection = null),
+                    ),
+                  ),
+                  title: Text(selCount == 0 ? 'Select devices' : '$selCount selected'),
+                  actions: [
+                    TextButton(
+                      onPressed: () =>
+                          setState(() => _selection = allSelected ? {} : {for (final p in model.peers) p.id}),
+                      child: Text(allSelected ? 'Select none' : 'Select all'),
+                    ),
+                  ],
+                )
+              : AppBar(
             title: const Text('HomeDrop'),
             actions: [
               IconButton(
@@ -122,6 +169,21 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
               ),
             ],
           ),
+          bottomNavigationBar: selecting
+              ? SafeArea(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+                    child: FilledButton.icon(
+                      style: FilledButton.styleFrom(minimumSize: const Size.fromHeight(48)),
+                      icon: const Icon(Icons.send),
+                      label: Text(selCount == 0
+                          ? 'Tick the devices to send to'
+                          : 'Send to $selCount device${selCount == 1 ? '' : 's'}'),
+                      onPressed: selCount == 0 ? null : _sendToSelected,
+                    ),
+                  ),
+                )
+              : null,
           body: RefreshIndicator(
             onRefresh: () async => model.api?.refresh(),
             child: ListView(
@@ -137,13 +199,41 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     onPressed: () => model.api?.refresh(),
                   ),
                 ),
+                if (model.peers.length > 1 && !selecting)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Row(children: [
+                      Expanded(
+                        child: FilledButton.tonalIcon(
+                          icon: const Icon(Icons.cell_tower),
+                          label: Text('Send to everyone (${model.peers.length})'),
+                          onPressed: () => showSendManySheet(context, model, model.peers, all: true),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.checklist),
+                          label: const Text('Choose devices'),
+                          onPressed: () => setState(() => _selection = {}),
+                        ),
+                      ),
+                    ]),
+                  ),
                 if (model.peers.isEmpty) const _EmptyDevices(),
                 for (final p in model.peers)
                   DeviceTile(
                     peer: p,
                     chat: model.chats[p.id],
-                    onTap: () => _openChat(p.id, p.name, os: p.os),
-                    onLongPress: () => showSendSheet(context, model, p),
+                    selected: selecting ? _selection!.contains(p.id) : null,
+                    onSelect: (_) => _toggle(p.id),
+                    onTap: selecting ? () => _toggle(p.id) : () => _openChat(p.id, p.name, os: p.os),
+                    // With several devices, long-press starts picking a group.
+                    onLongPress: selecting
+                        ? null
+                        : model.peers.length > 1
+                            ? () => _toggle(p.id)
+                            : () => showSendSheet(context, model, p),
                   ),
                 if (model.offlineChats.isNotEmpty) ...[
                   const SizedBox(height: 16),

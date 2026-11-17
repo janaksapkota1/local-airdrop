@@ -39,6 +39,21 @@ class CoreApi {
     return r['id'];
   }
 
+  /// Same files/text to several devices at once (each gets its own transfer).
+  /// Returns peer ID → transfer ID; devices that could not be started are
+  /// reported in [SendManyResult.errors].
+  Future<SendManyResult> sendMany({List<String> to = const [], bool all = false, List<String> paths = const [], String? text}) async {
+    final r = await _req('POST', '/api/send-many', {
+      if (all) 'all': true else 'to': to,
+      'paths': paths,
+      if (text != null && text.isNotEmpty) 'text': text,
+    });
+    return SendManyResult(
+      Map<String, String>.from(r['ids'] ?? const {}),
+      Map<String, String>.from(r['errors'] ?? const {}),
+    );
+  }
+
   Future<void> decide(String offerId, bool accept) => _req('POST', '/api/offers/$offerId', {'accept': accept});
   Future<void> cancel(String transferId) => _req('POST', '/api/transfers/$transferId/cancel');
   Future<void> clearFinished() => _req('POST', '/api/transfers/clear');
@@ -71,6 +86,11 @@ class CoreApi {
       client.close();
     }
   }
+}
+
+class SendManyResult {
+  final Map<String, String> ids, errors;
+  SendManyResult(this.ids, this.errors);
 }
 
 class CoreError implements Exception {

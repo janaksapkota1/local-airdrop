@@ -3,6 +3,8 @@
 //	homedropd serve                 receive files (and be discoverable)
 //	homedropd list                  show devices on the network
 //	homedropd send --to NAME FILES  send files/folders
+//	homedropd send --to "laptop,phone" FILES   send to several devices at once
+//	homedropd send --to all FILES   send to every device on the network
 //	homedropd send --to NAME --text "hello"
 //	homedropd id                    show this device's name and fingerprint
 package main
@@ -38,7 +40,7 @@ func usage() {
 usage:
   homedropd serve [--port N] [--dir DIR] [--auto-accept] [--clipboard]
   homedropd list
-  homedropd send --to NAME|ID|IP:PORT [--text TEXT] [FILES/FOLDERS...]
+  homedropd send --to NAME|ID|IP:PORT[,NAME...]|all [--text TEXT] [FILES/FOLDERS...]
   homedropd id
   homedropd daemon [--port N] [--control-port N]   (background service for the app)
 
@@ -297,7 +299,7 @@ func cmdList(ctx context.Context, args []string) error {
 func cmdSend(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("send", flag.ExitOnError)
 	g := addGlobals(fs)
-	to := fs.String("to", "", "device name, ID prefix, or IP:PORT")
+	to := fs.String("to", "", "device name, ID prefix or IP:PORT; several separated by commas; or \"all\"")
 	text := fs.String("text", "", "text to send (shows up on the receiver, can go to its clipboard)")
 	parallel := fs.Int("parallel", 4, "parallel file streams")
 	_ = fs.Parse(args)
@@ -310,18 +312,153 @@ func cmdSend(ctx context.Context, args []string) error {
 		return err
 	}
 
-	target, err := findTarget(ctx, id, trust, *to)
+	var names []string
+	for _, s := range strings.Split(*to, ",") {
+		if s = strings.TrimSpace(s); s != "" {
+			names = append(names, s)
+		}
+	}
+	if len(names) == 1 && !strings.EqualFold(names[0], "all") {
+		target, err := findTarget(ctx, id, trust, names[0])
+		if err != nil {
+			return err
+		}
+		return sendOne(ctx, transfer.NewClient(id, trust), target, paths, *text, *parallel)
+	}
+	targets, err := findTargets(ctx, id, trust, names)
 	if err != nil {
 		return err
 	}
+	return sendMany(ctx, transfer.NewClient(id, trust), targets, paths, *text, *parallel)
+}
 
-	client := transfer.NewClient(id, trust)
+// findTargets resolves several devices with one discovery session. "all"
+// means every device that answers.
+func findTargets(ctx context.Context, id *identity.Identity, trust *identity.TrustStore, names []string) ([]transfer.Target, error) {
+	var out []transfer.Target
+	seen := map[string]bool{}
+	add := func(t transfer.Target) {
+		if !seen[t.ID] && t.ID != id.Fingerprint {
+			seen[t.ID] = true
+			out = append(out, t)
+		}
+	}
+	var disc *discovery.Service
+	startDisc := func() error {
+		if disc != nil {
+			return nil
+		}
+		disc = discovery.New(discovery.Announce{ID: id.Fingerprint, Name: id.Name, OS: runtime.GOOS}, false)
+		return disc.Start(ctx)
+	}
+	for _, name := range names {
+		if strings.EqualFold(name, "all") {
+			if err := startDisc(); err != nil {
+				return nil, err
+			}
+			select {
+			case <-time.After(2 * time.Second):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			for _, p := range disc.Peers() {
+				add(transfer.Target{ID: p.ID, Name: p.Name, Addr: p.Addr})
+			}
+			continue
+		}
+		if _, _, err := net.SplitHostPort(name); err == nil {
+			t, err := findTarget(ctx, id, trust, name)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", name, err)
+			}
+			add(t)
+			continue
+		}
+		if err := startDisc(); err != nil {
+			return nil, err
+		}
+		fctx, cancel := context.WithTimeout(ctx, 6*time.Second)
+		p, err := disc.Find(fctx, name)
+		cancel()
+		if err != nil {
+			return nil, fmt.Errorf("device %q not found (try `homedropd list`, or --to IP:PORT)", name)
+		}
+		add(transfer.Target{ID: p.ID, Name: p.Name, Addr: p.Addr})
+	}
+	if len(out) == 0 {
+		return nil, errors.New("no devices found")
+	}
+	return out, nil
+}
+
+// sendMany sends to every target at the same time, each independently.
+func sendMany(ctx context.Context, client *transfer.Client, targets []transfer.Target, paths []string, text string, parallel int) error {
+	var printMu sync.Mutex
+	say := func(format string, a ...any) {
+		printMu.Lock()
+		fmt.Printf("\r\033[K"+format+"\n", a...)
+		printMu.Unlock()
+	}
+	type prog struct{ done, total atomic.Int64 }
+	progs := make([]prog, len(targets))
+	var lastPrint atomic.Int64
+	start := time.Now()
+
+	var wg sync.WaitGroup
+	var failed atomic.Int32
+	for i, t := range targets {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := client.Send(ctx, t, paths, text, transfer.SendOptions{
+				Parallel: parallel,
+				OnOffer: func(code string, trusted bool) {
+					if !trusted {
+						say("%s: new device — verification code %s (check it matches on the receiver)", t.Name, code)
+					}
+					say("%s: waiting to accept…", t.Name)
+				},
+				OnAccepted: func() { say("%s: accepted", t.Name) },
+				Progress: func(done, tot int64) {
+					progs[i].done.Store(done)
+					progs[i].total.Store(tot)
+					now := time.Now().UnixNano()
+					last := lastPrint.Load()
+					if now-last > int64(250*time.Millisecond) && lastPrint.CompareAndSwap(last, now) {
+						var d, tt int64
+						for j := range progs {
+							d += progs[j].done.Load()
+							tt += progs[j].total.Load()
+						}
+						printMu.Lock()
+						fmt.Printf("\r\033[Kall devices: %s", progressText(d, tt, time.Since(start)))
+						printMu.Unlock()
+					}
+				},
+			})
+			if err != nil {
+				failed.Add(1)
+				say("❌ %s: %v", t.Name, err)
+				return
+			}
+			say("✅ %s: done", t.Name)
+		}()
+	}
+	wg.Wait()
+	if f := failed.Load(); f > 0 {
+		return fmt.Errorf("%d of %d devices failed", f, len(targets))
+	}
+	fmt.Printf("✅ sent to %d devices in %s\n", len(targets), time.Since(start).Round(10*time.Millisecond))
+	return nil
+}
+
+func sendOne(ctx context.Context, client *transfer.Client, target transfer.Target, paths []string, text string, parallel int) error {
 	start := time.Now()
 	var sendStart atomic.Int64
 	var lastPrint atomic.Int64
 	var total atomic.Int64
 	opts := transfer.SendOptions{
-		Parallel: *parallel,
+		Parallel: parallel,
 		OnOffer: func(code string, trusted bool) {
 			if !trusted {
 				fmt.Printf("New device %q — verification code: %s (check it matches on the receiver)\n", target.Name, code)
@@ -339,7 +476,7 @@ func cmdSend(ctx context.Context, args []string) error {
 			}
 		},
 	}
-	if err := client.Send(ctx, target, paths, *text, opts); err != nil {
+	if err := client.Send(ctx, target, paths, text, opts); err != nil {
 		fmt.Println()
 		return err
 	}
